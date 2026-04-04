@@ -83,6 +83,14 @@ export function useLiveRunTranscripts({
     [runs],
   );
 
+  const runsRef = useRef(runs);
+  runsRef.current = runs;
+  const activeRunIdsRef = useRef(activeRunIds);
+  activeRunIdsRef.current = activeRunIds;
+  const runByIdRef = useRef(runById);
+  runByIdRef.current = runById;
+  const hasActiveRuns = activeRunIds.size > 0;
+
   const appendChunks = (runId: string, chunks: Array<RunLogChunk & { dedupeKey: string }>) => {
     if (chunks.length === 0) return;
     setChunksByRun((prev) => {
@@ -132,7 +140,7 @@ export function useLiveRunTranscripts({
   }, [runs]);
 
   useEffect(() => {
-    if (runs.length === 0) return;
+    if (runsRef.current.length === 0) return;
 
     seenChunkKeysRef.current.clear();
     pendingLogRowsByRunRef.current.clear();
@@ -142,7 +150,7 @@ export function useLiveRunTranscripts({
 
     const readAll = async () => {
       const results = await Promise.allSettled(
-        runs.map(async (run) => {
+        runsRef.current.map(async (run) => {
           const offset = logOffsetByRunRef.current.get(run.id) ?? 0;
           const result = await heartbeatsApi.log(run.id, offset, LOG_READ_LIMIT_BYTES);
           return { run, result, offset };
@@ -173,14 +181,16 @@ export function useLiveRunTranscripts({
 
         for (const [runId, chunks] of parsedByRun) {
           const existing = [...(next.get(runId) ?? [])];
+          let runChanged = false;
           for (const chunk of chunks) {
             if (seenChunkKeysRef.current.has(chunk.dedupeKey)) continue;
             seenChunkKeysRef.current.add(chunk.dedupeKey);
             existing.push({ ts: chunk.ts, stream: chunk.stream, chunk: chunk.chunk });
-            changed = true;
+            runChanged = true;
           }
-          if (existing.length > 0) {
+          if (runChanged) {
             next.set(runId, existing.slice(-maxChunksPerRun));
+            changed = true;
           }
         }
 
@@ -201,10 +211,11 @@ export function useLiveRunTranscripts({
       cancelled = true;
       window.clearInterval(interval);
     };
-  }, [maxChunksPerRun, runIdsKey, runs]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [maxChunksPerRun, runIdsKey]);
 
   useEffect(() => {
-    if (!companyId || activeRunIds.size === 0) return;
+    if (!companyId || !hasActiveRuns) return;
 
     let closed = false;
     let reconnectTimer: number | null = null;
@@ -235,8 +246,8 @@ export function useLiveRunTranscripts({
         if (event.companyId !== companyId) return;
         const payload = event.payload ?? {};
         const runId = readString(payload["runId"]);
-        if (!runId || !activeRunIds.has(runId)) return;
-        if (!runById.has(runId)) return;
+        if (!runId || !activeRunIdsRef.current.has(runId)) return;
+        if (!runByIdRef.current.has(runId)) return;
 
         if (event.type === "heartbeat.run.log") {
           const chunk = readString(payload["chunk"]);
@@ -302,7 +313,8 @@ export function useLiveRunTranscripts({
         socket.close(1000, "live_run_transcripts_unmount");
       }
     };
-  }, [activeRunIds, companyId, runById]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [companyId, hasActiveRuns]);
 
   const transcriptByRun = useMemo(() => {
     const next = new Map<string, TranscriptEntry[]>();
