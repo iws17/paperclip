@@ -85,6 +85,8 @@ export function useLiveRunTranscripts({
   const seenChunkKeysRef = useRef(new Set<string>());
   const pendingLogRowsByRunRef = useRef(new Map<string, string>());
   const logOffsetByRunRef = useRef(new Map<string, number>());
+  const runsRef = useRef(normalizedRuns);
+  runsRef.current = normalizedRuns;
   // Tick counter to force transcript recomputation when dynamic parser loads
   const [parserTick, setParserTick] = useState(0);
   useEffect(() => {
@@ -165,54 +167,107 @@ export function useLiveRunTranscripts({
   useEffect(() => {
     if (normalizedRuns.length === 0) return;
 
+    // Clear dedup set and pending buffers on effect re-run (including React
+    // StrictMode dev remount).  Refs survive unmount-remount but state does
+    // not, so stale keys would silently dedup every chunk and leave the
+    // transcript empty.
+    seenChunkKeysRef.current.clear();
+    pendingLogRowsByRunRef.current.clear();
+    logOffsetByRunRef.current.clear();
+
     let cancelled = false;
 
-    const readRunLog = async (run: RunTranscriptSource) => {
-      const offset = logOffsetByRunRef.current.get(run.id) ?? 0;
-      try {
-        const result = await heartbeatsApi.log(run.id, offset, LOG_READ_LIMIT_BYTES);
-        if (cancelled) return;
+    const readAll = async () => {
+      // Use runsRef.current so we always see the latest runs without
+      // restarting the polling effect on every runs identity change.
+      // Skip terminal runs — they won't produce new log output (this
+      // is the "activeRuns" optimization that used to live around the
+      // setInterval call, applied here so it benefits both the initial
+      // fetch and every subsequent poll tick).
+      const currentRuns = runsRef.current.filter(
+        (run) => !isTerminalStatus(run.status),
+      );
+      if (currentRuns.length === 0) return;
 
-        appendChunks(run.id, parsePersistedLogContent(run.id, result.content, pendingLogRowsByRunRef.current));
+      // Fetch all logs in parallel but apply as a single batched state update
+      // to avoid React state races where intermediate updates get lost.
+      const results = await Promise.allSettled(
+        currentRuns.map(async (run) => {
+          const offset = logOffsetByRunRef.current.get(run.id) ?? 0;
+          const result = await heartbeatsApi.log(run.id, offset, LOG_READ_LIMIT_BYTES);
+          return { run, result, offset };
+        }),
+      );
 
+      if (cancelled) return;
+
+      // Parse and batch all chunks into a single state update
+      const allParsed = new Map<string, Array<RunLogChunk & { dedupeKey: string }>>();
+      for (const settled of results) {
+        if (settled.status !== "fulfilled") continue;
+        const { run, result, offset } = settled.value;
+        const parsed = parsePersistedLogContent(run.id, result.content, pendingLogRowsByRunRef.current);
+        if (parsed.length > 0) {
+          allParsed.set(run.id, parsed);
+        }
         if (result.nextOffset !== undefined) {
           logOffsetByRunRef.current.set(run.id, result.nextOffset);
-          return;
-        }
-        if (result.content.length > 0) {
+        } else if (result.content.length > 0) {
           logOffsetByRunRef.current.set(run.id, offset + result.content.length);
         }
-      } catch {
-        // Ignore log read errors while output is initializing.
-      } finally {
-        if (!cancelled) {
-          setHydratedRunIds((prev) => {
-            if (prev.has(run.id)) return prev;
-            const next = new Set(prev);
-            next.add(run.id);
-            return next;
-          });
-        }
       }
-    };
 
-    const readAll = async () => {
-      await Promise.all(normalizedRuns.map((run) => readRunLog(run)));
+      // Single state update for all runs at once
+      if (allParsed.size > 0) {
+        setChunksByRun((prev) => {
+          const next = new Map(prev);
+          let changed = false;
+          for (const [runId, chunks] of allParsed) {
+            const existing = [...(next.get(runId) ?? [])];
+            for (const chunk of chunks) {
+              if (seenChunkKeysRef.current.has(chunk.dedupeKey)) continue;
+              seenChunkKeysRef.current.add(chunk.dedupeKey);
+              existing.push({ ts: chunk.ts, stream: chunk.stream, chunk: chunk.chunk });
+              changed = true;
+            }
+            next.set(runId, existing.slice(-maxChunksPerRun));
+          }
+          if (!changed) return prev;
+          if (seenChunkKeysRef.current.size > 12000) {
+            seenChunkKeysRef.current.clear();
+          }
+          return next;
+        });
+      }
+
+      // Mark all attempted runs as hydrated in a single batched state update.
+      // Upstream 03dff1a2 tracked hydration in a per-run finally block of the
+      // old per-run readRunLog; this is the batched equivalent that fits the
+      // allSettled structure without reintroducing a per-run setState.
+      setHydratedRunIds((prev) => {
+        let changed = false;
+        const next = new Set(prev);
+        for (const run of currentRuns) {
+          if (!next.has(run.id)) {
+            next.add(run.id);
+            changed = true;
+          }
+        }
+        return changed ? next : prev;
+      });
     };
 
     void readAll();
-    const activeRuns = normalizedRuns.filter((run) => !isTerminalStatus(run.status));
-    const interval = activeRuns.length > 0
-      ? window.setInterval(() => {
-          void Promise.all(activeRuns.map((run) => readRunLog(run)));
-        }, LOG_POLL_INTERVAL_MS)
-      : null;
+    const interval = window.setInterval(() => {
+      void readAll();
+    }, LOG_POLL_INTERVAL_MS);
 
     return () => {
       cancelled = true;
-      if (interval !== null) window.clearInterval(interval);
+      window.clearInterval(interval);
     };
-  }, [normalizedRuns, runIdsKey]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- runIdsKey captures run identity; runsRef avoids effect churn
+  }, [runIdsKey]);
 
   useEffect(() => {
     if (!companyId || activeRunIds.size === 0) return;
