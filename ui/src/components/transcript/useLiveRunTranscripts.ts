@@ -87,6 +87,13 @@ export function useLiveRunTranscripts({
   const logOffsetByRunRef = useRef(new Map<string, number>());
   const runsRef = useRef(normalizedRuns);
   runsRef.current = normalizedRuns;
+  // Tracks the runIdsKey seen on the current mount. On a true mount or
+  // StrictMode dev remount this starts at null (cleanup nulls it), so
+  // the poll effect below knows to clear dedup/offset refs. On a plain
+  // re-run caused by runIdsKey changing (e.g. a new run was added), the
+  // existing runs' offsets and dedup keys must survive so we don't
+  // re-fetch their logs from byte 0 and double every chunk.
+  const mountKeyRef = useRef<string | null>(null);
   // Tick counter to force transcript recomputation when dynamic parser loads
   const [parserTick, setParserTick] = useState(0);
   useEffect(() => {
@@ -167,13 +174,22 @@ export function useLiveRunTranscripts({
   useEffect(() => {
     if (normalizedRuns.length === 0) return;
 
-    // Clear dedup set and pending buffers on effect re-run (including React
-    // StrictMode dev remount).  Refs survive unmount-remount but state does
-    // not, so stale keys would silently dedup every chunk and leave the
-    // transcript empty.
-    seenChunkKeysRef.current.clear();
-    pendingLogRowsByRunRef.current.clear();
-    logOffsetByRunRef.current.clear();
+    // Only clear dedup / pending / offset refs on a true mount or
+    // StrictMode dev remount — NOT when runIdsKey changes because a
+    // new run was appended. Refs survive unmount-remount but state
+    // does not, so on a remount stale keys would silently dedup every
+    // chunk and leave the transcript empty. But on a mere runIdsKey
+    // change (existing runs plus a new one), clearing offsets would
+    // cause readAll to re-fetch existing runs from byte 0 and every
+    // already-seen chunk would pass the cleared dedup check, doubling
+    // the transcript for existing runs. mountKeyRef is nulled by the
+    // cleanup below, so a true unmount-remount cycle is detectable.
+    if (mountKeyRef.current === null) {
+      seenChunkKeysRef.current.clear();
+      pendingLogRowsByRunRef.current.clear();
+      logOffsetByRunRef.current.clear();
+    }
+    mountKeyRef.current = runIdsKey;
 
     let cancelled = false;
 
@@ -258,13 +274,26 @@ export function useLiveRunTranscripts({
     };
 
     void readAll();
-    const interval = window.setInterval(() => {
-      void readAll();
-    }, LOG_POLL_INTERVAL_MS);
+    // Only create the polling interval when there's at least one
+    // non-terminal run to watch. If every run is already in a
+    // terminal state the interval would fire every 2s forever,
+    // doing a filter + early-return on each tick for no benefit.
+    const hasActive = runsRef.current.some(
+      (run) => !isTerminalStatus(run.status),
+    );
+    const interval = hasActive
+      ? window.setInterval(() => {
+          void readAll();
+        }, LOG_POLL_INTERVAL_MS)
+      : null;
 
     return () => {
       cancelled = true;
-      window.clearInterval(interval);
+      // Null the mount key so a subsequent StrictMode remount
+      // (which lands in the same closure-less effect body) knows
+      // to clear the dedup/offset refs.
+      mountKeyRef.current = null;
+      if (interval !== null) window.clearInterval(interval);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps -- runIdsKey captures run identity; runsRef avoids effect churn
   }, [runIdsKey]);
