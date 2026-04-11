@@ -7,10 +7,14 @@ import type { TranscriptEntry } from "../adapters";
 import { issuesApi } from "../api/issues";
 import { queryKeys } from "../lib/queryKeys";
 import { cn, relativeTime } from "../lib/utils";
-import { ExternalLink } from "lucide-react";
+import { ExternalLink, Loader2 } from "lucide-react";
 import { Identity } from "./Identity";
-import { RunChatSurface } from "./RunChatSurface";
 import { useLiveRunTranscripts } from "./transcript/useLiveRunTranscripts";
+import {
+  displayToolName,
+  summarizeToolInput,
+  summarizeToolResult,
+} from "../lib/transcriptPresentation";
 
 const MIN_DASHBOARD_RUNS = 4;
 
@@ -144,13 +148,129 @@ function AgentRunCard({
       </div>
 
       <div className="min-h-0 flex-1 overflow-y-auto p-3">
-        <RunChatSurface
-          run={run}
-          transcript={transcript}
-          hasOutput={hasOutput}
-          companyId={companyId}
-        />
+        <AgentRunSummary transcript={transcript} hasOutput={hasOutput} isActive={isActive} />
       </div>
+    </div>
+  );
+}
+
+interface SummaryItem {
+  kind: "text" | "tool" | "status";
+  text: string;
+  pending?: boolean;
+  isError?: boolean;
+}
+
+function extractSummaryItems(transcript: TranscriptEntry[]): SummaryItem[] {
+  const items: SummaryItem[] = [];
+
+  // Collect tool call inputs and results, keyed by toolUseId
+  const toolInputs = new Map<string, { name: string; input: unknown }>();
+
+  for (const entry of transcript) {
+    if (entry.kind === "tool_call") {
+      toolInputs.set(entry.toolUseId ?? `tc-${items.length}`, {
+        name: entry.name,
+        input: entry.input,
+      });
+      // Will be emitted as pending until a matching result arrives
+    } else if (entry.kind === "tool_result") {
+      const id = entry.toolUseId;
+      const tool = toolInputs.get(id);
+      const name = tool?.name ?? entry.toolName ?? "tool";
+      const input = tool?.input ?? {};
+      const displayName = displayToolName(name, input);
+      const resultSummary = summarizeToolResult(entry.content ?? "", entry.isError);
+      const label = entry.isError
+        ? `${displayName} — ${resultSummary}`
+        : `${displayName} — ${resultSummary}`;
+      items.push({ kind: "tool", text: label, isError: entry.isError });
+      toolInputs.delete(id);
+    } else if (entry.kind === "assistant" && entry.text?.trim()) {
+      // Use only non-delta (complete) assistant messages
+      if (!entry.delta) {
+        items.push({ kind: "text", text: entry.text.trim() });
+      }
+    }
+  }
+
+  // Any unresolved tool calls are still pending
+  for (const [, tool] of toolInputs) {
+    const displayName = displayToolName(tool.name, tool.input);
+    const inputSummary = summarizeToolInput(tool.name, tool.input);
+    items.push({ kind: "tool", text: `${displayName} — ${inputSummary}`, pending: true });
+  }
+
+  return items;
+}
+
+function AgentRunSummary({
+  transcript,
+  hasOutput,
+  isActive,
+}: {
+  transcript: TranscriptEntry[];
+  hasOutput: boolean;
+  isActive: boolean;
+}) {
+  const items = useMemo(() => extractSummaryItems(transcript), [transcript]);
+
+  if (!hasOutput && !isActive) {
+    return (
+      <p className="text-[12px] text-muted-foreground/60 italic">No run output captured.</p>
+    );
+  }
+
+  if (items.length === 0) {
+    return (
+      <p className="text-[12px] text-muted-foreground/60 italic">
+        {isActive ? "Waiting for run output…" : "No output."}
+      </p>
+    );
+  }
+
+  // Show last 6 items (most recent at bottom)
+  const visible = items.slice(-6);
+
+  return (
+    <div className="space-y-1.5">
+      {visible.map((item, i) => {
+        if (item.kind === "text") {
+          return (
+            <p
+              key={i}
+              className="text-[12px] leading-5 text-foreground/80 line-clamp-3"
+            >
+              {item.text}
+            </p>
+          );
+        }
+        // tool
+        return (
+          <div key={i} className="flex items-start gap-1.5">
+            {item.pending ? (
+              <Loader2 className="mt-0.5 h-3 w-3 shrink-0 animate-spin text-muted-foreground/50" />
+            ) : (
+              <span
+                className={cn(
+                  "mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full",
+                  item.isError ? "bg-destructive/70" : "bg-muted-foreground/35",
+                )}
+              />
+            )}
+            <span
+              className={cn(
+                "truncate text-[11px] leading-5",
+                item.isError
+                  ? "text-destructive/80"
+                  : "text-muted-foreground/70",
+              )}
+            >
+              {item.text}
+            </span>
+          </div>
+        );
+      })}
     </div>
   );
 }
