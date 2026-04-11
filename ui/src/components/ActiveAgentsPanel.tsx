@@ -176,14 +176,13 @@ function extractSummaryItems(transcript: TranscriptEntry[]): SummaryItem[] {
       // Will be emitted as pending until a matching result arrives
     } else if (entry.kind === "tool_result") {
       const id = entry.toolUseId;
+      if (!id) continue;
       const tool = toolInputs.get(id);
       const name = tool?.name ?? entry.toolName ?? "tool";
       const input = tool?.input ?? {};
       const displayName = displayToolName(name, input);
       const resultSummary = summarizeToolResult(entry.content ?? "", entry.isError);
-      const label = entry.isError
-        ? `${displayName} — ${resultSummary}`
-        : `${displayName} — ${resultSummary}`;
+      const label = `${displayName} — ${resultSummary}`;
       items.push({ kind: "tool", text: label, isError: entry.isError });
       toolInputs.delete(id);
     } else if (entry.kind === "assistant" && entry.text?.trim()) {
