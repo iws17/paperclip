@@ -94,6 +94,13 @@ export function useLiveRunTranscripts({
   // existing runs' offsets and dedup keys must survive so we don't
   // re-fetch their logs from byte 0 and double every chunk.
   const mountKeyRef = useRef<string | null>(null);
+  // Tracks whether the first readAll pass has completed for the current mount.
+  // On the first call we fetch ALL runs (including terminal ones) so their log
+  // chunks hydrate and isInitialHydrating can flip to false. On subsequent poll
+  // ticks we filter out terminal runs to avoid pointlessly re-hitting the log
+  // endpoint every 2s for runs that won't produce new output. Reset alongside
+  // the other refs when mountKeyRef detects a true unmount/remount cycle.
+  const initialFetchDoneRef = useRef(false);
   // Tick counter to force transcript recomputation when dynamic parser loads
   const [parserTick, setParserTick] = useState(0);
   useEffect(() => {
@@ -188,6 +195,7 @@ export function useLiveRunTranscripts({
       seenChunkKeysRef.current.clear();
       pendingLogRowsByRunRef.current.clear();
       logOffsetByRunRef.current.clear();
+      initialFetchDoneRef.current = false;
     }
     mountKeyRef.current = runIdsKey;
 
@@ -196,13 +204,23 @@ export function useLiveRunTranscripts({
     const readAll = async () => {
       // Use runsRef.current so we always see the latest runs without
       // restarting the polling effect on every runs identity change.
-      // Skip terminal runs — they won't produce new log output (this
-      // is the "activeRuns" optimization that used to live around the
-      // setInterval call, applied here so it benefits both the initial
-      // fetch and every subsequent poll tick).
-      const currentRuns = runsRef.current.filter(
-        (run) => !isTerminalStatus(run.status),
-      );
+      //
+      // On the FIRST pass (initial mount or remount), fetch every run —
+      // including terminal ones — so their final log chunks hydrate
+      // chunksByRun and hydratedRunIds once. On subsequent poll ticks,
+      // skip terminal runs since they won't produce more output.
+      //
+      // Without this split, terminal-only run sets stay in a permanent
+      // "hydrating" state: readAll returns early before setHydratedRunIds
+      // is called, isInitialHydrating never flips to false, and the
+      // IssueDetail chat tab renders IssueChatSkeleton forever.
+      const allRuns = runsRef.current;
+      if (allRuns.length === 0) return;
+      const isFirstPass = !initialFetchDoneRef.current;
+      initialFetchDoneRef.current = true;
+      const currentRuns = isFirstPass
+        ? allRuns
+        : allRuns.filter((run) => !isTerminalStatus(run.status));
       if (currentRuns.length === 0) return;
 
       // Fetch all logs in parallel but apply as a single batched state update
