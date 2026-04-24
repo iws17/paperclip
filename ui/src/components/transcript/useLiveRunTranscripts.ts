@@ -210,24 +210,6 @@ export function useLiveRunTranscripts({
   useEffect(() => {
     if (normalizedRuns.length === 0) return;
 
-    // Only clear dedup / pending / offset refs on a true mount or
-    // StrictMode dev remount — NOT when runIdsKey changes because a
-    // new run was appended. Refs survive unmount-remount but state
-    // does not, so on a remount stale keys would silently dedup every
-    // chunk and leave the transcript empty. But on a mere runIdsKey
-    // change (existing runs plus a new one), clearing offsets would
-    // cause readAll to re-fetch existing runs from byte 0 and every
-    // already-seen chunk would pass the cleared dedup check, doubling
-    // the transcript for existing runs. mountKeyRef is nulled by the
-    // cleanup below, so a true unmount-remount cycle is detectable.
-    if (mountKeyRef.current === null) {
-      seenChunkKeysRef.current.clear();
-      pendingLogRowsByRunRef.current.clear();
-      logOffsetByRunRef.current.clear();
-      initialFetchDoneRef.current = false;
-    }
-    mountKeyRef.current = runIdsKey;
-
     let cancelled = false;
 
     const readRunLog = async (run: RunTranscriptSource) => {
@@ -239,30 +221,13 @@ export function useLiveRunTranscripts({
         const result = await heartbeatsApi.log(run.id, offset, logReadLimitBytes);
         if (cancelled) return;
 
-      // Fetch all logs in parallel but apply as a single batched state update
-      // to avoid React state races where intermediate updates get lost.
-      const results = await Promise.allSettled(
-        currentRuns.map(async (run) => {
-          const offset = logOffsetByRunRef.current.get(run.id) ?? 0;
-          const result = await heartbeatsApi.log(run.id, offset, LOG_READ_LIMIT_BYTES);
-          return { run, result, offset };
-        }),
-      );
+        appendChunks(run.id, parsePersistedLogContent(run.id, result.content, pendingLogRowsByRunRef.current));
 
-      if (cancelled) return;
-
-      // Parse and batch all chunks into a single state update
-      const allParsed = new Map<string, Array<RunLogChunk & { dedupeKey: string }>>();
-      for (const settled of results) {
-        if (settled.status !== "fulfilled") continue;
-        const { run, result, offset } = settled.value;
-        const parsed = parsePersistedLogContent(run.id, result.content, pendingLogRowsByRunRef.current);
-        if (parsed.length > 0) {
-          allParsed.set(run.id, parsed);
-        }
         if (result.nextOffset !== undefined) {
           logOffsetByRunRef.current.set(run.id, result.nextOffset);
-        } else if (result.content.length > 0) {
+          return;
+        }
+        if (result.content.length > 0) {
           logOffsetByRunRef.current.set(run.id, offset + result.content.length);
         }
       } catch (error) {
@@ -279,45 +244,10 @@ export function useLiveRunTranscripts({
           });
         }
       }
+    };
 
-      // Single state update for all runs at once
-      if (allParsed.size > 0) {
-        setChunksByRun((prev) => {
-          const next = new Map(prev);
-          let changed = false;
-          for (const [runId, chunks] of allParsed) {
-            const existing = [...(next.get(runId) ?? [])];
-            for (const chunk of chunks) {
-              if (seenChunkKeysRef.current.has(chunk.dedupeKey)) continue;
-              seenChunkKeysRef.current.add(chunk.dedupeKey);
-              existing.push({ ts: chunk.ts, stream: chunk.stream, chunk: chunk.chunk });
-              changed = true;
-            }
-            next.set(runId, existing.slice(-maxChunksPerRun));
-          }
-          if (!changed) return prev;
-          if (seenChunkKeysRef.current.size > 12000) {
-            seenChunkKeysRef.current.clear();
-          }
-          return next;
-        });
-      }
-
-      // Mark all attempted runs as hydrated in a single batched state update.
-      // Upstream 03dff1a2 tracked hydration in a per-run finally block of the
-      // old per-run readRunLog; this is the batched equivalent that fits the
-      // allSettled structure without reintroducing a per-run setState.
-      setHydratedRunIds((prev) => {
-        let changed = false;
-        const next = new Set(prev);
-        for (const run of currentRuns) {
-          if (!next.has(run.id)) {
-            next.add(run.id);
-            changed = true;
-          }
-        }
-        return changed ? next : prev;
-      });
+    const readAll = async () => {
+      await Promise.all(normalizedRuns.map((run) => readRunLog(run)));
     };
 
     void readAll();
@@ -330,10 +260,6 @@ export function useLiveRunTranscripts({
 
     return () => {
       cancelled = true;
-      // Null the mount key so a subsequent StrictMode remount
-      // (which lands in the same closure-less effect body) knows
-      // to clear the dedup/offset refs.
-      mountKeyRef.current = null;
       if (interval !== null) window.clearInterval(interval);
     };
   }, [logPollIntervalMs, logReadLimitBytes, normalizedRuns, runIdsKey]);

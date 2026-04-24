@@ -7,14 +7,10 @@ import type { TranscriptEntry } from "../adapters";
 import { issuesApi } from "../api/issues";
 import { queryKeys } from "../lib/queryKeys";
 import { cn, relativeTime } from "../lib/utils";
-import { ExternalLink, Loader2 } from "lucide-react";
+import { ExternalLink } from "lucide-react";
 import { Identity } from "./Identity";
+import { RunChatSurface } from "./RunChatSurface";
 import { useLiveRunTranscripts } from "./transcript/useLiveRunTranscripts";
-import {
-  displayToolName,
-  summarizeToolInput,
-  summarizeToolResult,
-} from "../lib/transcriptPresentation";
 
 const MIN_DASHBOARD_RUNS = 4;
 const DASHBOARD_RUN_CARD_LIMIT = 4;
@@ -189,7 +185,12 @@ const AgentRunCard = memo(function AgentRunCard({
       </div>
 
       <div className="min-h-0 flex-1 overflow-y-auto p-3">
-        <AgentRunSummary transcript={transcript} hasOutput={hasOutput} isActive={isActive} />
+        <RunChatSurface
+          run={run}
+          transcript={transcript}
+          hasOutput={hasOutput}
+          companyId={companyId}
+        />
       </div>
     </div>
   );
