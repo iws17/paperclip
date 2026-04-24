@@ -11,6 +11,9 @@ patchedDependencies:
   embedded-postgres@18.1.0-beta.16:
     hash: 55uhvnotpqyiy37rn3pqpukhei
     path: patches/embedded-postgres@18.1.0-beta.16.patch
+  hermes-paperclip-adapter@0.3.0:
+    hash: xkxaxyknlswdllytwxcp77x64q
+    path: patches/hermes-paperclip-adapter@0.3.0.patch
 
 importers:
 
@@ -529,8 +532,8 @@ importers:
         specifier: ^5.1.0
         version: 5.2.1
       hermes-paperclip-adapter:
-        specifier: ^0.2.0
-        version: 0.2.0
+        specifier: ^0.3.0
+        version: 0.3.0(patch_hash=xkxaxyknlswdllytwxcp77x64q)
       jsdom:
         specifier: ^28.1.0
         version: 28.1.0(@noble/hashes@2.0.1)
@@ -668,8 +671,8 @@ importers:
         specifier: ^1.1.1
         version: 1.1.1(@types/react-dom@19.2.3(@types/react@19.2.14))(@types/react@19.2.14)(react-dom@19.2.4(react@19.2.4))(react@19.2.4)
       hermes-paperclip-adapter:
-        specifier: ^0.2.0
-        version: 0.2.0
+        specifier: ^0.3.0
+        version: 0.3.0(patch_hash=xkxaxyknlswdllytwxcp77x64q)
       lexical:
         specifier: 0.35.0
         version: 0.35.0
@@ -2140,8 +2143,8 @@ packages:
   '@open-draft/deferred-promise@2.2.0':
     resolution: {integrity: sha512-CecwLWx3rhxVQF6V4bAgPS5t+So2sTbPgAzafKkVizyi7tlwpcFpdFqq+wqF2OwNBmqFuu6tOyouTuxgpMfzmA==}
 
-  '@paperclipai/adapter-utils@2026.325.0':
-    resolution: {integrity: sha512-YDVSAgjkeJ0PvxXDJVN9MZDX7oYRzidLtGHmGgRGd6gSk/bF2ygAKvND4FI1YxDc/cRLQjqAFCpCYaC/9wqIEA==}
+  '@paperclipai/adapter-utils@2026.416.0':
+    resolution: {integrity: sha512-uSbrE2SOj6N3x0v5eW+bt0r+4hgJYoLawDM5oBJ+EG+CCZ9+g3wqr4M/GONy8Gx8U+pHLRnq+Z94p0biZrktSQ==}
 
   '@paralleldrive/cuid2@2.3.1':
     resolution: {integrity: sha512-XO7cAxhnTZl0Yggq6jOgjiOHhbgcO4NqFqwSmQpjK3b6TEE6Uj/jfSk6wzYyemh3+I0sHirKSetjQwn5cZktFw==}
@@ -4614,8 +4617,8 @@ packages:
   help-me@5.0.0:
     resolution: {integrity: sha512-7xgomUX6ADmcYzFik0HzAxh/73YlKR9bmFzf51CZwR+b6YtzU2m0u49hQCqV6SvlqIqsaxovfwdvbnsw3b/zpg==}
 
-  hermes-paperclip-adapter@0.2.0:
-    resolution: {integrity: sha512-6CP5vxfvY4jY9XJK5zu4ZUL9aB7HHNtEMk6q7m1Pu9Gzoby1Vx5VNmVqte3NUO+1cvVK9Arj1f67xLagWkbo5Q==}
+  hermes-paperclip-adapter@0.3.0:
+    resolution: {integrity: sha512-MgAM/H2Fp650RVr5E1hYat5n8FaCzvxOOjhlN98hUMS9q6M+JeLvVE8Z1LfUs8KlavCn10m+DiwBxH55m0SmHA==}
     engines: {node: '>=20.0.0'}
 
   hono@4.12.12:
@@ -8041,7 +8044,7 @@ snapshots:
 
   '@open-draft/deferred-promise@2.2.0': {}
 
-  '@paperclipai/adapter-utils@2026.325.0': {}
+  '@paperclipai/adapter-utils@2026.416.0': {}
 
   '@paralleldrive/cuid2@2.3.1':
     dependencies:
@@ -10679,9 +10682,9 @@ snapshots:
 
   help-me@5.0.0: {}
 
-  hermes-paperclip-adapter@0.2.0:
+  hermes-paperclip-adapter@0.3.0(patch_hash=xkxaxyknlswdllytwxcp77x64q):
     dependencies:
-      '@paperclipai/adapter-utils': 2026.325.0
+      '@paperclipai/adapter-utils': 2026.416.0
       picocolors: 1.1.1
 
   hono@4.12.12: {}
