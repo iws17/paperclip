@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { memo, useMemo } from "react";
 import { Link } from "@/lib/router";
 import { useQuery } from "@tanstack/react-query";
 import type { Issue } from "@paperclipai/shared";
@@ -17,6 +17,11 @@ import {
 } from "../lib/transcriptPresentation";
 
 const MIN_DASHBOARD_RUNS = 4;
+const DASHBOARD_RUN_CARD_LIMIT = 4;
+const DASHBOARD_LOG_POLL_INTERVAL_MS = 15_000;
+const DASHBOARD_LOG_READ_LIMIT_BYTES = 64_000;
+const DASHBOARD_MAX_CHUNKS_PER_RUN = 40;
+const EMPTY_TRANSCRIPT: TranscriptEntry[] = [];
 
 function isRunActive(run: LiveRunForIssue): boolean {
   return run.status === "queued" || run.status === "running";
@@ -24,19 +29,41 @@ function isRunActive(run: LiveRunForIssue): boolean {
 
 interface ActiveAgentsPanelProps {
   companyId: string;
+  title?: string;
+  minRunCount?: number;
+  fetchLimit?: number;
+  cardLimit?: number;
+  gridClassName?: string;
+  cardClassName?: string;
+  emptyMessage?: string;
+  queryScope?: string;
+  showMoreLink?: boolean;
 }
 
-export function ActiveAgentsPanel({ companyId }: ActiveAgentsPanelProps) {
+export function ActiveAgentsPanel({
+  companyId,
+  title = "Agents",
+  minRunCount = MIN_DASHBOARD_RUNS,
+  fetchLimit,
+  cardLimit = DASHBOARD_RUN_CARD_LIMIT,
+  gridClassName,
+  cardClassName,
+  emptyMessage = "No recent agent runs.",
+  queryScope = "dashboard",
+  showMoreLink = true,
+}: ActiveAgentsPanelProps) {
   const { data: liveRuns } = useQuery({
-    queryKey: [...queryKeys.liveRuns(companyId), "dashboard"],
-    queryFn: () => heartbeatsApi.liveRunsForCompany(companyId, MIN_DASHBOARD_RUNS),
+    queryKey: [...queryKeys.liveRuns(companyId), queryScope, { minRunCount, fetchLimit }],
+    queryFn: () => heartbeatsApi.liveRunsForCompany(companyId, { minCount: minRunCount, limit: fetchLimit }),
   });
 
   const runs = liveRuns ?? [];
+  const visibleRuns = useMemo(() => runs.slice(0, cardLimit), [cardLimit, runs]);
+  const hiddenRunCount = Math.max(0, runs.length - visibleRuns.length);
   const { data: issues } = useQuery({
     queryKey: [...queryKeys.issues.list(companyId), "with-routine-executions"],
     queryFn: () => issuesApi.list(companyId, { includeRoutineExecutions: true }),
-    enabled: runs.length > 0,
+    enabled: visibleRuns.length > 0,
   });
 
   const issueById = useMemo(() => {
@@ -48,46 +75,58 @@ export function ActiveAgentsPanel({ companyId }: ActiveAgentsPanelProps) {
   }, [issues]);
 
   const { transcriptByRun, hasOutputForRun } = useLiveRunTranscripts({
-    runs,
+    runs: visibleRuns,
     companyId,
-    maxChunksPerRun: 120,
+    maxChunksPerRun: DASHBOARD_MAX_CHUNKS_PER_RUN,
+    logPollIntervalMs: DASHBOARD_LOG_POLL_INTERVAL_MS,
+    logReadLimitBytes: DASHBOARD_LOG_READ_LIMIT_BYTES,
+    enableRealtimeUpdates: false,
   });
 
   return (
     <div>
       <h3 className="mb-3 text-sm font-semibold uppercase tracking-wide text-muted-foreground">
-        Agents
+        {title}
       </h3>
       {runs.length === 0 ? (
         <div className="rounded-xl border border-border p-4">
-          <p className="text-sm text-muted-foreground">No recent agent runs.</p>
+          <p className="text-sm text-muted-foreground">{emptyMessage}</p>
         </div>
       ) : (
-        <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 sm:gap-4 xl:grid-cols-4">
-          {runs.map((run) => (
+        <div className={cn("grid grid-cols-1 gap-2 sm:grid-cols-2 sm:gap-4 xl:grid-cols-4", gridClassName)}>
+          {visibleRuns.map((run) => (
             <AgentRunCard
               key={run.id}
               companyId={companyId}
               run={run}
               issue={run.issueId ? issueById.get(run.issueId) : undefined}
-              transcript={transcriptByRun.get(run.id) ?? []}
+              transcript={transcriptByRun.get(run.id) ?? EMPTY_TRANSCRIPT}
               hasOutput={hasOutputForRun(run.id)}
               isActive={isRunActive(run)}
+              className={cardClassName}
             />
           ))}
+        </div>
+      )}
+      {showMoreLink && hiddenRunCount > 0 && (
+        <div className="mt-3 flex justify-end text-xs text-muted-foreground">
+          <Link to="/dashboard/live" className="hover:text-foreground hover:underline">
+            {hiddenRunCount} more active/recent run{hiddenRunCount === 1 ? "" : "s"}
+          </Link>
         </div>
       )}
     </div>
   );
 }
 
-function AgentRunCard({
+const AgentRunCard = memo(function AgentRunCard({
   companyId,
   run,
   issue,
   transcript,
   hasOutput,
   isActive,
+  className,
 }: {
   companyId: string;
   run: LiveRunForIssue;
@@ -95,6 +134,7 @@ function AgentRunCard({
   transcript: TranscriptEntry[];
   hasOutput: boolean;
   isActive: boolean;
+  className?: string;
 }) {
   return (
     <div className={cn(
@@ -102,6 +142,7 @@ function AgentRunCard({
       isActive
         ? "border-cyan-500/25 bg-cyan-500/[0.04] shadow-[0_16px_40px_rgba(6,182,212,0.08)]"
         : "border-border bg-background/70",
+      className,
     )}>
       <div className="border-b border-border/60 px-3 py-3">
         <div className="flex items-start justify-between gap-2">
@@ -152,124 +193,4 @@ function AgentRunCard({
       </div>
     </div>
   );
-}
-
-interface SummaryItem {
-  kind: "text" | "tool" | "status";
-  text: string;
-  pending?: boolean;
-  isError?: boolean;
-}
-
-function extractSummaryItems(transcript: TranscriptEntry[]): SummaryItem[] {
-  const items: SummaryItem[] = [];
-
-  // Collect tool call inputs and results, keyed by toolUseId
-  const toolInputs = new Map<string, { name: string; input: unknown }>();
-
-  for (const entry of transcript) {
-    if (entry.kind === "tool_call") {
-      toolInputs.set(entry.toolUseId ?? `tc-${items.length}`, {
-        name: entry.name,
-        input: entry.input,
-      });
-      // Will be emitted as pending until a matching result arrives
-    } else if (entry.kind === "tool_result") {
-      const id = entry.toolUseId;
-      if (!id) continue;
-      const tool = toolInputs.get(id);
-      const name = tool?.name ?? entry.toolName ?? "tool";
-      const input = tool?.input ?? {};
-      const displayName = displayToolName(name, input);
-      const resultSummary = summarizeToolResult(entry.content ?? "", entry.isError);
-      const label = `${displayName} — ${resultSummary}`;
-      items.push({ kind: "tool", text: label, isError: entry.isError });
-      toolInputs.delete(id);
-    } else if (entry.kind === "assistant" && entry.text?.trim()) {
-      // Use only non-delta (complete) assistant messages
-      if (!entry.delta) {
-        items.push({ kind: "text", text: entry.text.trim() });
-      }
-    }
-  }
-
-  // Any unresolved tool calls are still pending
-  for (const [, tool] of toolInputs) {
-    const displayName = displayToolName(tool.name, tool.input);
-    const inputSummary = summarizeToolInput(tool.name, tool.input);
-    items.push({ kind: "tool", text: `${displayName} — ${inputSummary}`, pending: true });
-  }
-
-  return items;
-}
-
-function AgentRunSummary({
-  transcript,
-  hasOutput,
-  isActive,
-}: {
-  transcript: TranscriptEntry[];
-  hasOutput: boolean;
-  isActive: boolean;
-}) {
-  const items = useMemo(() => extractSummaryItems(transcript), [transcript]);
-
-  if (!hasOutput && !isActive) {
-    return (
-      <p className="text-[12px] text-muted-foreground/60 italic">No run output captured.</p>
-    );
-  }
-
-  if (items.length === 0) {
-    return (
-      <p className="text-[12px] text-muted-foreground/60 italic">
-        {isActive ? "Waiting for run output…" : "No output."}
-      </p>
-    );
-  }
-
-  // Show last 6 items (most recent at bottom)
-  const visible = items.slice(-6);
-
-  return (
-    <div className="space-y-1.5">
-      {visible.map((item, i) => {
-        if (item.kind === "text") {
-          return (
-            <p
-              key={i}
-              className="text-[12px] leading-5 text-foreground/80 line-clamp-3"
-            >
-              {item.text}
-            </p>
-          );
-        }
-        // tool
-        return (
-          <div key={i} className="flex items-start gap-1.5">
-            {item.pending ? (
-              <Loader2 className="mt-0.5 h-3 w-3 shrink-0 animate-spin text-muted-foreground/50" />
-            ) : (
-              <span
-                className={cn(
-                  "mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full",
-                  item.isError ? "bg-destructive/70" : "bg-muted-foreground/35",
-                )}
-              />
-            )}
-            <span
-              className={cn(
-                "truncate text-[11px] leading-5",
-                item.isError
-                  ? "text-destructive/80"
-                  : "text-muted-foreground/70",
-              )}
-            >
-              {item.text}
-            </span>
-          </div>
-        );
-      })}
-    </div>
-  );
-}
+});
