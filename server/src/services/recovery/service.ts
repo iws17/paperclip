@@ -121,8 +121,8 @@ function summarizeRunFailureForIssueComment(run: LatestIssueRun) {
 function summarizeRunLivenessForIssueComment(run: LatestIssueRun) {
   if (!run) return null;
 
-  const livenessState = readNonEmptyString(run.livenessState);
-  const livenessReason = readNonEmptyString(run.livenessReason);
+  const livenessState = readNonEmptyString(run.livenessState)?.trim() ?? null;
+  const livenessReason = readNonEmptyString(run.livenessReason)?.trim() ?? null;
   if (livenessState && livenessReason) {
     return ` Latest liveness: \`${livenessState}\` - ${livenessReason}.`;
   }
@@ -1247,6 +1247,7 @@ export function recoveryService(db: Db, deps: { enqueueWakeup: RecoveryWakeup })
       : "none";
     const retryReason = readNonEmptyString(parseObject(input.latestRun?.contextSnapshot)?.retryReason) ?? "unknown";
     const failureSummary = summarizeRunFailureForIssueComment(input.latestRun);
+    const livenessSummary = summarizeRunLivenessForIssueComment(input.latestRun);
 
     return [
       "Paperclip escalated an assigned issue with no live execution path and created this explicit recovery task.",
@@ -1260,6 +1261,7 @@ export function recoveryService(db: Db, deps: { enqueueWakeup: RecoveryWakeup })
       `- Detected invariant: \`stranded_assigned_issue\``,
       `- Retry reason: \`${retryReason}\``,
       failureSummary ? `- Failure: ${failureSummary.trim()}` : "- Failure: none recorded",
+      livenessSummary ? `- Liveness: ${livenessSummary.trim()}` : "- Liveness: none recorded",
       "",
       "## Ownership",
       "",
@@ -1535,7 +1537,7 @@ export function recoveryService(db: Db, deps: { enqueueWakeup: RecoveryWakeup })
           latestRun,
           comment:
             "Paperclip stopped automatic continuation because the latest successful run requires manual follow-up " +
-            `or declared a blocker, and this assigned \`in_progress\` issue has no live execution path.${livenessSummary ?? ""} ` +
+            `or has declared a blocker, and this assigned \`in_progress\` issue has no live execution path.${livenessSummary ?? ""} ` +
             "Moving it to `blocked` so it is visible for intervention.",
         });
         if (updated) {

@@ -588,6 +588,8 @@ describeEmbeddedPostgres("heartbeat orphaned process recovery", () => {
     runId: string;
     previousStatus: "todo" | "in_progress";
     retryReason: "assignment_recovery" | "issue_continuation_needed" | "unknown";
+    livenessState?: string;
+    livenessReason?: string;
   }) {
     const recovery = await waitForValue(async () =>
       db.select().from(issues).where(
@@ -612,6 +614,12 @@ describeEmbeddedPostgres("heartbeat orphaned process recovery", () => {
     expect(recovery.title).toContain("Recover stalled issue");
     expect(recovery.description).toContain(`Previous source status: \`${input.previousStatus}\``);
     expect(recovery.description).toContain(`Retry reason: \`${input.retryReason}\``);
+    if (input.livenessState) {
+      expect(recovery.description).toContain(`Liveness: Latest liveness: \`${input.livenessState}\``);
+    }
+    if (input.livenessReason) {
+      expect(recovery.description).toContain(input.livenessReason);
+    }
     expect(recovery.description).toContain("Fix the runtime/adapter problem");
 
     const relation = await db
@@ -1556,6 +1564,8 @@ describeEmbeddedPostgres("heartbeat orphaned process recovery", () => {
       runId,
       previousStatus: "in_progress",
       retryReason: "unknown",
+      livenessState: "needs_followup",
+      livenessReason: "Run produced useful output but no concrete action evidence",
     });
 
     const comments = await db.select().from(issueComments).where(eq(issueComments.issueId, issueId));
@@ -1568,7 +1578,11 @@ describeEmbeddedPostgres("heartbeat orphaned process recovery", () => {
       .select()
       .from(heartbeatRuns)
       .where(eq(heartbeatRuns.agentId, agentId));
-    expect(runs).toHaveLength(1);
+    const sourceIssueRuns = runs.filter((run) => {
+      const contextSnapshot = run.contextSnapshot as { issueId?: string } | null;
+      return contextSnapshot?.issueId === issueId;
+    });
+    expect(sourceIssueRuns).toHaveLength(1);
   });
 
   it("escalates in-progress work when the latest successful run declared a blocker", async () => {
@@ -1599,11 +1613,13 @@ describeEmbeddedPostgres("heartbeat orphaned process recovery", () => {
       runId,
       previousStatus: "in_progress",
       retryReason: "unknown",
+      livenessState: "blocked",
+      livenessReason: "Run output declared a concrete blocker",
     });
 
     const comments = await db.select().from(issueComments).where(eq(issueComments.issueId, issueId));
     expect(comments).toHaveLength(1);
-    expect(comments[0]?.body).toContain("latest successful run requires manual follow-up or declared a blocker");
+    expect(comments[0]?.body).toContain("latest successful run requires manual follow-up or has declared a blocker");
     expect(comments[0]?.body).toContain("Run output declared a concrete blocker");
     expect(comments[0]?.body).toContain(`Recovery issue: [${recovery.identifier}]`);
 
@@ -1611,7 +1627,11 @@ describeEmbeddedPostgres("heartbeat orphaned process recovery", () => {
       .select()
       .from(heartbeatRuns)
       .where(eq(heartbeatRuns.agentId, agentId));
-    expect(runs).toHaveLength(1);
+    const sourceIssueRuns = runs.filter((run) => {
+      const contextSnapshot = run.contextSnapshot as { issueId?: string } | null;
+      return contextSnapshot?.issueId === issueId;
+    });
+    expect(sourceIssueRuns).toHaveLength(1);
   });
 
   it("does not reconcile user-assigned work through the agent stranded-work recovery path", async () => {
