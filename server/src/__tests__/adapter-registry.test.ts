@@ -8,6 +8,9 @@ const hermesExecuteMock = vi.hoisted(() =>
     timedOut: false,
   })),
 );
+const hermesListModelsMock = vi.hoisted(() =>
+  vi.fn(async () => [{ id: "gpt-5.5", label: "gpt-5.5" }]),
+);
 
 vi.mock("hermes-paperclip-adapter/server", () => ({
   execute: hermesExecuteMock,
@@ -21,6 +24,12 @@ vi.mock("hermes-paperclip-adapter/server", () => ({
   listSkills: async () => [],
   syncSkills: async () => ({ entries: [] }),
   detectModel: async () => null,
+}));
+
+vi.mock("hermes-paperclip-adapter", () => ({
+  agentConfigurationDoc: "Hermes docs",
+  models: [],
+  listModels: hermesListModelsMock,
 }));
 
 import {
@@ -165,6 +174,22 @@ describe("server adapter registry", () => {
     expect(adapter!.instructionsPathKey).toBe("instructionsFilePath");
     expect(adapter!.requiresMaterializedRuntimeSkills).toBe(false);
     expect(adapter!.supportsLocalAgentJwt).toBe(true);
+  });
+
+  it("built-in hermes_local adapter declares managed instruction support", () => {
+    const adapter = findActiveServerAdapter("hermes_local");
+    expect(adapter).not.toBeNull();
+    expect(adapter!.supportsInstructionsBundle).toBe(true);
+    expect(adapter!.instructionsPathKey).toBe("instructionsFilePath");
+    expect(adapter!.requiresMaterializedRuntimeSkills).toBe(false);
+    expect(adapter!.supportsLocalAgentJwt).toBe(true);
+  });
+
+  it("built-in hermes_local adapter exposes dynamic model discovery", async () => {
+    await expect(listAdapterModels("hermes_local")).resolves.toEqual([
+      { id: "gpt-5.5", label: "gpt-5.5" },
+    ]);
+    expect(hermesListModelsMock).toHaveBeenCalledTimes(1);
   });
 
   it("switches active adapter behavior back to the builtin when an override is paused", async () => {
