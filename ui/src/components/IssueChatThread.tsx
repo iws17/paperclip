@@ -2635,7 +2635,7 @@ export function IssueChatThread({
       && lastUserId !== lastUserMessageIdRef.current
     ) {
       pendingSubmitScrollRef.current = false;
-      const custom = lastUserMessage?.metadata.custom as { anchorId?: unknown } | undefined;
+      const custom = (lastUserMessage?.metadata?.custom ?? undefined) as { anchorId?: unknown } | undefined;
       const anchorId = typeof custom?.anchorId === "string" ? custom.anchorId : null;
       if (anchorId) {
         const reserve = Math.round(window.innerHeight * SUBMIT_SCROLL_RESERVE_VH);
